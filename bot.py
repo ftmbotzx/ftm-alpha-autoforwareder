@@ -397,34 +397,92 @@ def start_web():
 # --- MAIN ---
 async def post_init(application):
     await start_userbot()
-
 def main():
-    load_config()
-    threading.Thread(target=start_web).start()
+    load_config()  # Load config from JSON
 
+    # Start FastAPI web server in a separate thread for Render deployment
+    threading.Thread(target=start_web, daemon=True).start()
+
+    # Build the Telegram bot application
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # Conversation Handlers
+    # --- Conversation Handlers ---
+
+    # Session string login
     session_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, session_login_receive)],
-        states={AWAIT_SESSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, session_login_receive)]},
+        states={
+            AWAIT_SESSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, session_login_receive)]
+        },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
         per_user=True,
     )
+
+    # Phone login
     phone_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, phone_receive)],
-        states={AWAIT_PHONE:[MessageHandler(filters.TEXT & ~filters.COMMAND, phone_receive)]},
+        states={
+            AWAIT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_receive)]
+        },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
         per_user=True,
     )
+
+    # Add channels
     add_channel_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, channel_add_receive)],
-        states={AWAIT_SOURCE_ADD:[MessageHandler(filters.TEXT & ~filters.COMMAND, channel_add_receive)],
-                AWAIT_TARGET_ADD:[MessageHandler(filters.TEXT & ~filters.COMMAND, channel_add_receive)]},
+        states={
+            AWAIT_SOURCE_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, channel_add_receive)],
+            AWAIT_TARGET_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, channel_add_receive)],
+        },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
         per_user=True,
     )
+
+    # Remove channels
     remove_channel_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(channel_remove_start, pattern="^remove_")],
-        states={AWAIT_SOURCE_REMOVE:[CallbackQueryHandler(channel_remove_selection, pattern="^del_source_")],
-                AWAIT_TARGET_REMOVE:[CallbackQueryHandler(channel_remove_selection, pattern="^del_target_")]
+        states={
+            AWAIT_SOURCE_REMOVE: [CallbackQueryHandler(channel_remove_selection, pattern="^del_source_")],
+            AWAIT_TARGET_REMOVE: [CallbackQueryHandler(channel_remove_selection, pattern="^del_target_")]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_conversation),
+            CallbackQueryHandler(lambda u, c: channel_menu(u, c, "source"), pattern="^source_menu$"),
+            CallbackQueryHandler(lambda u, c: channel_menu(u, c, "target"), pattern="^target_menu$")
+        ],
+        per_user=True,
+    )
+
+    # Caption conversation
+    caption_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(caption_set_start, pattern="^set_caption$")],
+        states={
+            AWAIT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, caption_set_receive)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        per_user=True,
+    )
+
+    # --- Register Handlers ---
+
+    # Commands
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("settings", start_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("verify", verify_code_command))  # For /verify code
+
+    # Conversation handlers
+    application.add_handler(session_conv)
+    application.add_handler(phone_conv)
+    application.add_handler(add_channel_conv)
+    application.add_handler(remove_channel_conv)
+    application.add_handler(caption_conv)
+
+    # Inline buttons
+    application.add_handler(CallbackQueryHandler(caption_clear, pattern="^clear_caption$"))
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    # Start the bot
+    logger.info("Starting Telegram bot...")
+    application.run_polling()
